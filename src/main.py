@@ -25,6 +25,11 @@ db.init_app(app)
 with app.app_context():
     db.create_all()
 
+@app.route('/admin')
+def admin_panel():
+    """Serve the admin panel interface"""
+    return send_from_directory(app.static_folder, 'admin.html')
+
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):

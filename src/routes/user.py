@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request
 from werkzeug.security import generate_password_hash, check_password_hash
 from src.models.user import User, Wallet, Transaction, KYCRecord, CryptoPrices, db
 import jwt
-import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 import requests
 import secrets
@@ -72,7 +72,7 @@ def register():
         
         token = jwt.encode({
             'user_id': user.id,
-            'exp': datetime.datetime.utcnow() + datetime.timedelta(days=30)
+            'exp': datetime.utcnow() + timedelta(days=30)
         }, SECRET_KEY, algorithm='HS256')
         
         return jsonify({
@@ -93,7 +93,7 @@ def login():
         if user and check_password_hash(user.password_hash, data['password']):
             token = jwt.encode({
                 'user_id': user.id,
-                'exp': datetime.datetime.utcnow() + datetime.timedelta(days=30)
+                'exp': datetime.utcnow() + timedelta(days=30)
             }, SECRET_KEY, algorithm='HS256')
             
             return jsonify({
@@ -408,4 +408,405 @@ def get_users():
 def get_user(user_id):
     user = User.query.get_or_404(user_id)
     return jsonify(user.to_dict())
+
+
+
+# Admin functionality for adding crypto to user wallets
+def admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        admin_key = request.headers.get('X-Admin-Key')
+        if not admin_key or admin_key != 'alphazee09_admin_2024':
+            return jsonify({'message': 'Admin access required'}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+@user_bp.route('/admin/users', methods=['GET'])
+@admin_required
+def admin_get_all_users():
+    """Get all users for admin panel"""
+    try:
+        users = User.query.all()
+        users_data = []
+        
+        for user in users:
+            user_data = user.to_dict()
+            # Add wallet information
+            wallets = Wallet.query.filter_by(user_id=user.id).all()
+            user_data['wallets'] = []
+            
+            for wallet in wallets:
+                user_data['wallets'].append({
+                    'id': wallet.id,
+                    'currency': wallet.currency,
+                    'address': wallet.address,
+                    'balance': float(wallet.balance)
+                })
+            
+            users_data.append(user_data)
+        
+        return jsonify({
+            'message': 'Users retrieved successfully',
+            'users': users_data,
+            'total_users': len(users_data)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'message': f'Error retrieving users: {str(e)}'}), 500
+
+@user_bp.route('/admin/users/<int:user_id>/add-crypto', methods=['POST'])
+@admin_required
+def admin_add_crypto_to_user(user_id):
+    """Add cryptocurrency to a specific user's wallet"""
+    try:
+        data = request.json
+        currency = data.get('currency', '').upper()
+        amount = float(data.get('amount', 0))
+        
+        if not currency or amount <= 0:
+            return jsonify({'message': 'Valid currency and amount required'}), 400
+        
+        if currency not in ['BTC', 'USDT', 'ETH']:
+            return jsonify({'message': 'Unsupported currency. Use BTC, USDT, or ETH'}), 400
+        
+        # Check if user exists
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'message': 'User not found'}), 404
+        
+        # Find or create wallet for this currency
+        wallet = Wallet.query.filter_by(user_id=user_id, currency=currency).first()
+        
+        if not wallet:
+            # Create new wallet if it doesn't exist
+            if currency == 'BTC':
+                address = f"1{secrets.token_hex(16)[:25]}"
+            elif currency == 'ETH' or currency == 'USDT':
+                address = f"0x{secrets.token_hex(20)}"
+            else:
+                address = f"{currency.lower()}_{secrets.token_hex(16)}"
+            
+            private_key = secrets.token_hex(32)
+            
+            wallet = Wallet(
+                user_id=user_id,
+                currency=currency,
+                address=address,
+                private_key=private_key,
+                balance=0.0
+            )
+            db.session.add(wallet)
+        
+        # Add the amount to wallet balance
+        old_balance = float(wallet.balance)
+        wallet.balance = float(wallet.balance) + amount
+        
+        # Create a transaction record for this admin addition
+        transaction = Transaction(
+            user_id=user_id,
+            to_wallet_id=wallet.id,
+            transaction_type='receive',
+            currency=currency,
+            amount=amount,
+            fee=0.0,
+            to_address=wallet.address,
+            from_address='ADMIN_DEPOSIT',
+            tx_hash=f"admin_{secrets.token_hex(32)}",
+            block_number=secrets.randbelow(1000000) + 800000,
+            block_hash=f"0x{secrets.token_hex(32)}",
+            gas_used=21000 if currency in ['ETH', 'USDT'] else None,
+            gas_price=20000000000 if currency in ['ETH', 'USDT'] else None,
+            contract_address='0xa0b86a33e6ba3b936f1e5b6b7b8b5c6d8e9f0a1b' if currency == 'USDT' else None,
+            status='confirmed',
+            created_at=datetime.utcnow(),
+            confirmed_at=datetime.utcnow()
+        )
+        
+        db.session.add(transaction)
+        db.session.commit()
+        
+        return jsonify({
+            'message': f'Successfully added {amount} {currency} to user {user.username}',
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email
+            },
+            'wallet': {
+                'currency': currency,
+                'address': wallet.address,
+                'old_balance': old_balance,
+                'new_balance': float(wallet.balance),
+                'amount_added': amount
+            },
+            'transaction': {
+                'id': transaction.id,
+                'tx_hash': transaction.tx_hash,
+                'block_number': transaction.block_number,
+                'status': transaction.status
+            }
+        }), 200
+        
+    except ValueError:
+        return jsonify({'message': 'Invalid amount format'}), 400
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'message': f'Error adding crypto: {str(e)}'}), 500
+
+@user_bp.route('/admin/users/<int:user_id>/wallets', methods=['GET'])
+@admin_required
+def admin_get_user_wallets(user_id):
+    """Get all wallets for a specific user"""
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'message': 'User not found'}), 404
+        
+        wallets = Wallet.query.filter_by(user_id=user_id).all()
+        wallets_data = []
+        
+        for wallet in wallets:
+            wallets_data.append({
+                'id': wallet.id,
+                'currency': wallet.currency,
+                'address': wallet.address,
+                'balance': float(wallet.balance),
+                'created_at': wallet.created_at.isoformat() if wallet.created_at else None
+            })
+        
+        return jsonify({
+            'message': 'User wallets retrieved successfully',
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email
+            },
+            'wallets': wallets_data,
+            'total_wallets': len(wallets_data)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'message': f'Error retrieving wallets: {str(e)}'}), 500
+
+@user_bp.route('/admin/transactions', methods=['GET'])
+@admin_required
+def admin_get_all_transactions():
+    """Get all transactions for admin monitoring"""
+    try:
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 50, type=int)
+        
+        transactions = Transaction.query.order_by(Transaction.created_at.desc()).paginate(
+            page=page, per_page=per_page, error_out=False
+        )
+        
+        transactions_data = []
+        for transaction in transactions.items:
+            user = User.query.get(transaction.user_id)
+            wallet = None
+            if transaction.to_wallet_id:
+                wallet = Wallet.query.get(transaction.to_wallet_id)
+            elif transaction.from_wallet_id:
+                wallet = Wallet.query.get(transaction.from_wallet_id)
+            
+            transactions_data.append({
+                'id': transaction.id,
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email
+                } if user else None,
+                'wallet_currency': wallet.currency if wallet else transaction.currency,
+                'transaction_type': transaction.transaction_type,
+                'amount': float(transaction.amount),
+                'fee': float(transaction.fee) if transaction.fee else 0,
+                'to_address': transaction.to_address,
+                'from_address': transaction.from_address,
+                'tx_hash': transaction.tx_hash,
+                'status': transaction.status,
+                'created_at': transaction.created_at.isoformat() if transaction.created_at else None,
+                'confirmed_at': transaction.confirmed_at.isoformat() if transaction.confirmed_at else None
+            })
+        
+        return jsonify({
+            'message': 'Transactions retrieved successfully',
+            'transactions': transactions_data,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total': transactions.total,
+                'pages': transactions.pages,
+                'has_next': transactions.has_next,
+                'has_prev': transactions.has_prev
+            }
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'message': f'Error retrieving transactions: {str(e)}'}), 500
+
+@user_bp.route('/admin/send-crypto', methods=['POST'])
+@admin_required
+def admin_send_crypto_to_user():
+    """Send cryptocurrency from admin to any user"""
+    try:
+        data = request.json
+        username = data.get('username')
+        currency = data.get('currency', '').upper()
+        amount = float(data.get('amount', 0))
+        note = data.get('note', 'Admin transfer')
+        
+        if not username or not currency or amount <= 0:
+            return jsonify({'message': 'Username, currency, and amount are required'}), 400
+        
+        if currency not in ['BTC', 'USDT', 'ETH']:
+            return jsonify({'message': 'Unsupported currency. Use BTC, USDT, or ETH'}), 400
+        
+        # Find user by username
+        user = User.query.filter_by(username=username).first()
+        if not user:
+            return jsonify({'message': f'User {username} not found'}), 404
+        
+        # Find or create wallet
+        wallet = Wallet.query.filter_by(user_id=user.id, currency=currency).first()
+        
+        if not wallet:
+            # Create new wallet
+            if currency == 'BTC':
+                address = f"1{secrets.token_hex(16)[:25]}"
+            elif currency == 'ETH' or currency == 'USDT':
+                address = f"0x{secrets.token_hex(20)}"
+            else:
+                address = f"{currency.lower()}_{secrets.token_hex(16)}"
+            
+            private_key = secrets.token_hex(32)
+            
+            wallet = Wallet(
+                user_id=user.id,
+                currency=currency,
+                address=address,
+                private_key=private_key,
+                balance=0.0
+            )
+            db.session.add(wallet)
+        
+        # Add amount to wallet
+        old_balance = float(wallet.balance)
+        wallet.balance = float(wallet.balance) + amount
+        
+        # Create transaction record
+        transaction = Transaction(
+            user_id=user.id,
+            to_wallet_id=wallet.id,
+            transaction_type='receive',
+            currency=currency,
+            amount=amount,
+            fee=0.0,
+            to_address=wallet.address,
+            from_address='ADMIN_SEND',
+            tx_hash=f"admin_send_{secrets.token_hex(32)}",
+            block_number=secrets.randbelow(1000000) + 800000,
+            block_hash=f"0x{secrets.token_hex(32)}",
+            gas_used=21000 if currency in ['ETH', 'USDT'] else None,
+            gas_price=20000000000 if currency in ['ETH', 'USDT'] else None,
+            contract_address='0xa0b86a33e6ba3b936f1e5b6b7b8b5c6d8e9f0a1b' if currency == 'USDT' else None,
+            status='confirmed',
+            created_at=datetime.utcnow(),
+            confirmed_at=datetime.utcnow()
+        )
+        
+        db.session.add(transaction)
+        db.session.commit()
+        
+        return jsonify({
+            'message': f'Successfully sent {amount} {currency} to {username}',
+            'recipient': {
+                'username': user.username,
+                'email': user.email
+            },
+            'transfer_details': {
+                'currency': currency,
+                'amount': amount,
+                'old_balance': old_balance,
+                'new_balance': float(wallet.balance),
+                'wallet_address': wallet.address,
+                'note': note
+            },
+            'transaction': {
+                'tx_hash': transaction.tx_hash,
+                'block_number': transaction.block_number,
+                'status': transaction.status,
+                'timestamp': transaction.created_at.isoformat()
+            }
+        }), 200
+        
+    except ValueError:
+        return jsonify({'message': 'Invalid amount format'}), 400
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'message': f'Error sending crypto: {str(e)}'}), 500
+
+@user_bp.route('/admin/stats', methods=['GET'])
+@admin_required
+def admin_get_stats():
+    """Get admin dashboard statistics"""
+    try:
+        total_users = User.query.count()
+        verified_users = User.query.filter_by(is_verified=True).count()
+        total_wallets = Wallet.query.count()
+        total_transactions = Transaction.query.count()
+        
+        # Get wallet balances by currency
+        wallet_stats = db.session.query(
+            Wallet.currency,
+            db.func.count(Wallet.id).label('wallet_count'),
+            db.func.sum(Wallet.balance).label('total_balance')
+        ).group_by(Wallet.currency).all()
+        
+        currency_stats = []
+        for stat in wallet_stats:
+            currency_stats.append({
+                'currency': stat.currency,
+                'wallet_count': stat.wallet_count,
+                'total_balance': float(stat.total_balance) if stat.total_balance else 0
+            })
+        
+        # Recent transactions
+        recent_transactions = Transaction.query.order_by(
+            Transaction.created_at.desc()
+        ).limit(10).all()
+        
+        recent_tx_data = []
+        for tx in recent_transactions:
+            user = User.query.get(tx.user_id)
+            wallet = None
+            if tx.to_wallet_id:
+                wallet = Wallet.query.get(tx.to_wallet_id)
+            elif tx.from_wallet_id:
+                wallet = Wallet.query.get(tx.from_wallet_id)
+            
+            recent_tx_data.append({
+                'id': tx.id,
+                'username': user.username if user else 'Unknown',
+                'currency': wallet.currency if wallet else tx.currency,
+                'type': tx.transaction_type,
+                'amount': float(tx.amount),
+                'status': tx.status,
+                'created_at': tx.created_at.isoformat() if tx.created_at else None
+            })
+        
+        return jsonify({
+            'message': 'Admin statistics retrieved successfully',
+            'stats': {
+                'total_users': total_users,
+                'verified_users': verified_users,
+                'total_wallets': total_wallets,
+                'total_transactions': total_transactions,
+                'verification_rate': round((verified_users / total_users * 100), 2) if total_users > 0 else 0
+            },
+            'currency_stats': currency_stats,
+            'recent_transactions': recent_tx_data
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'message': f'Error retrieving stats: {str(e)}'}), 500
 
