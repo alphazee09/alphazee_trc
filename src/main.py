@@ -7,6 +7,7 @@ from flask import Flask, send_from_directory
 from flask_cors import CORS
 from src.models.user import db
 from src.routes.user import user_bp
+from src.routes.admin import admin_bp
 
 app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'static'))
 app.config['SECRET_KEY'] = 'alphazee09_secret_key_2024'
@@ -15,6 +16,7 @@ app.config['SECRET_KEY'] = 'alphazee09_secret_key_2024'
 CORS(app, origins="*", allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 app.register_blueprint(user_bp, url_prefix='/api')
+app.register_blueprint(admin_bp, url_prefix='/api')
 
 # Database configuration
 app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(os.path.dirname(__file__), 'database', 'app.db')}"

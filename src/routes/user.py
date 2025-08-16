@@ -26,6 +26,11 @@ def token_required(f):
             current_user = User.query.get(data['user_id'])
             if not current_user:
                 return jsonify({'message': 'User not found'}), 401
+            if current_user.is_blocked:
+                return jsonify({
+                    'message': 'Account is blocked. Please contact support.',
+                    'blocked_reason': current_user.blocked_reason
+                }), 403
         except jwt.ExpiredSignatureError:
             return jsonify({'message': 'Token has expired'}), 401
         except jwt.InvalidTokenError:
@@ -59,16 +64,20 @@ def register():
         db.session.add(user)
         db.session.commit()
         
-        # Create default wallets for BTC and USDT
-        btc_wallet = Wallet(user_id=user.id, currency='BTC')
-        btc_wallet.generate_address('BTC')
+        # Create default wallets for all supported cryptocurrencies
+        supported_currencies = ['BTC', 'USDT', 'ETH']
+        created_wallets = []
         
-        usdt_wallet = Wallet(user_id=user.id, currency='USDT')
-        usdt_wallet.generate_address('USDT')
+        for currency in supported_currencies:
+            wallet = Wallet(user_id=user.id, currency=currency)
+            wallet.generate_address(currency)
+            db.session.add(wallet)
+            created_wallets.append(wallet)
         
-        db.session.add(btc_wallet)
-        db.session.add(usdt_wallet)
         db.session.commit()
+        
+        # Log wallet creation for audit
+        print(f"Created {len(created_wallets)} wallets for user {user.username}: {[w.currency for w in created_wallets]}")
         
         token = jwt.encode({
             'user_id': user.id,
@@ -78,7 +87,8 @@ def register():
         return jsonify({
             'message': 'User registered successfully',
             'token': token,
-            'user': user.to_dict()
+            'user': user.to_dict(),
+            'wallets': [wallet.to_dict() for wallet in created_wallets]
         }), 201
         
     except Exception as e:
@@ -91,6 +101,14 @@ def login():
         user = User.query.filter_by(username=data['username']).first()
         
         if user and check_password_hash(user.password_hash, data['password']):
+            # Check if user is blocked
+            if user.is_blocked:
+                return jsonify({
+                    'message': 'Account is blocked. Please contact support.',
+                    'blocked_reason': user.blocked_reason,
+                    'blocked_at': user.blocked_at.isoformat() if user.blocked_at else None
+                }), 403
+            
             token = jwt.encode({
                 'user_id': user.id,
                 'exp': datetime.utcnow() + timedelta(days=30)
