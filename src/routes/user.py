@@ -26,6 +26,11 @@ def token_required(f):
             current_user = User.query.get(data['user_id'])
             if not current_user:
                 return jsonify({'message': 'User not found'}), 401
+            if current_user.is_blocked:
+                return jsonify({
+                    'message': 'Account is blocked. Please contact support.',
+                    'blocked_reason': current_user.blocked_reason
+                }), 403
         except jwt.ExpiredSignatureError:
             return jsonify({'message': 'Token has expired'}), 401
         except jwt.InvalidTokenError:
@@ -91,6 +96,14 @@ def login():
         user = User.query.filter_by(username=data['username']).first()
         
         if user and check_password_hash(user.password_hash, data['password']):
+            # Check if user is blocked
+            if user.is_blocked:
+                return jsonify({
+                    'message': 'Account is blocked. Please contact support.',
+                    'blocked_reason': user.blocked_reason,
+                    'blocked_at': user.blocked_at.isoformat() if user.blocked_at else None
+                }), 403
+            
             token = jwt.encode({
                 'user_id': user.id,
                 'exp': datetime.utcnow() + timedelta(days=30)

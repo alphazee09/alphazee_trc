@@ -16,6 +16,10 @@ class User(db.Model):
     profile_image = db.Column(db.Text, nullable=True)
     fingerprint_enabled = db.Column(db.Boolean, default=False)
     is_verified = db.Column(db.Boolean, default=False)
+    is_blocked = db.Column(db.Boolean, default=False)
+    blocked_at = db.Column(db.DateTime, nullable=True)
+    blocked_by = db.Column(db.Integer, db.ForeignKey('admin.id'), nullable=True)
+    blocked_reason = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -37,8 +41,64 @@ class User(db.Model):
             'profile_image': self.profile_image,
             'fingerprint_enabled': self.fingerprint_enabled,
             'is_verified': self.is_verified,
+            'is_blocked': self.is_blocked,
+            'blocked_at': self.blocked_at.isoformat() if self.blocked_at else None,
+            'blocked_reason': self.blocked_reason,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+class Admin(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    first_name = db.Column(db.String(50), nullable=True)
+    last_name = db.Column(db.String(50), nullable=True)
+    role = db.Column(db.String(50), default='admin')  # admin, super_admin
+    is_active = db.Column(db.Boolean, default=True)
+    last_login = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    admin_actions = db.relationship('AdminAction', backref='admin', lazy=True)
+    
+    def __repr__(self):
+        return f'<Admin {self.username}>'
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'username': self.username,
+            'email': self.email,
+            'first_name': self.first_name,
+            'last_name': self.last_name,
+            'role': self.role,
+            'is_active': self.is_active,
+            'last_login': self.last_login.isoformat() if self.last_login else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+class AdminAction(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    admin_id = db.Column(db.Integer, db.ForeignKey('admin.id'), nullable=False)
+    action_type = db.Column(db.String(50), nullable=False)  # block_user, unblock_user, send_crypto, view_wallet
+    target_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    action_details = db.Column(db.JSON, nullable=True)  # Store additional details about the action
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    def __repr__(self):
+        return f'<AdminAction {self.action_type} by Admin {self.admin_id}>'
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'admin_id': self.admin_id,
+            'action_type': self.action_type,
+            'target_user_id': self.target_user_id,
+            'action_details': self.action_details,
+            'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
 class Wallet(db.Model):
