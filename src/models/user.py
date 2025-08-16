@@ -121,12 +121,12 @@ class Wallet(db.Model):
             # Generate Bitcoin-like address
             random_bytes = secrets.token_bytes(25)
             address = '1' + hashlib.sha256(random_bytes).hexdigest()[:33]
-        elif currency == 'USDT':
-            # Generate Ethereum-like address for USDT ERC-20
+        elif currency in ['USDT', 'ETH']:
+            # Generate Ethereum-like address for ETH and USDT ERC-20
             random_bytes = secrets.token_bytes(20)
             address = '0x' + random_bytes.hex()
         else:
-            # Default format
+            # Default Ethereum-like format for other tokens
             random_bytes = secrets.token_bytes(20)
             address = '0x' + random_bytes.hex()
         

@@ -26,7 +26,7 @@ def create_default_admin():
     }
     
     # API endpoint
-    base_url = "https://zmhqivcm6ly1.manus.space/api"
+    base_url = "https://bazari.aygroup.app/api"
     # For local testing, use: base_url = "http://localhost:5001/api"
     
     register_url = f"{base_url}/admin/register"
@@ -87,7 +87,7 @@ def test_admin_login():
         "password": "Admin123!"
     }
     
-    base_url = "https://zmhqivcm6ly1.manus.space/api"
+    base_url = "https://bazari.aygroup.app/api"
     # For local testing, use: base_url = "http://localhost:5001/api"
     
     login_url = f"{base_url}/admin/login"
@@ -151,7 +151,7 @@ if __name__ == "__main__":
     print("=== Setup Complete ===")
     print()
     print("📖 API Documentation: See API_DOCUMENTATION.md")
-    print("🌐 Base URL: https://zmhqivcm6ly1.manus.space/api")
+    print("🌐 Base URL: https://bazari.aygroup.app/api")
     print("👤 Default Admin Credentials:")
     print("   Username: admin")
     print("   Password: Admin123!")
